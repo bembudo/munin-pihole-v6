@@ -1,0 +1,81 @@
+#!/bin/bash
+
+# Munin Plugin for Pi-hole v6 Queries with session caching
+# Requires: curl, jq
+# Reads PASSWORD from environment variable
+
+PIHOLE_URL="${PIHOLE_URL:?Please set PIHOLE_URL}"
+PASSWORD="${PASSWORD:?Please set PASSWORD}"
+SESSION_CACHE="/tmp/pihole_session_id"
+SESSION_TTL=$((30 * 60))  # 30 minutes in seconds
+
+get_session_id() {
+    # Check if cached session ID exists and is still fresh
+    if [ -f "$SESSION_CACHE" ]; then
+        now=$(date +%s)
+        modified=$(stat -c %Y "$SESSION_CACHE")
+        age=$((now - modified))
+        if [ "$age" -lt "$SESSION_TTL" ]; then
+            sid=$(cat "$SESSION_CACHE")
+            if [ -n "$sid" ]; then
+                echo "$sid"
+                return
+            fi
+        fi
+    fi
+
+    # Request new session ID
+    new_sid=$(curl -s -k -X POST "${PIHOLE_URL}/api/auth" \
+         -H "Content-Type: application/json" \
+         -H "accept: application/json" \
+         -d "{\"password\":\"$PASSWORD\"}" \
+    | jq -r '.session.sid')
+
+    # Validate and cache only if it's not null or empty
+    if [ -n "$new_sid" ] && [ "$new_sid" != "null" ]; then
+        echo "$new_sid" > "$SESSION_CACHE"
+        echo "$new_sid"
+    else
+        echo "ERROR: Failed to obtain valid session ID" >&2
+        exit 1
+    fi
+}
+
+get_stats() {
+    SID="$1"
+    curl -s -k -X GET "${PIHOLE_URL}/api/stats/summary" \
+         -H "accept: application/json" \
+         -H "sid: ${SID}"
+}
+
+if [ "$1" = "config" ]; then
+    echo "graph_title Pi-hole Queries"
+    echo "graph_vlabel queries"
+    echo "graph_category network"
+    echo "total_queries.label Total"
+    echo "blocked_queries.label Blocked"
+    echo "cached_queries.label Cached"
+    echo "forwarded_queries.label Forwarded"
+    echo "percent_blocked.label % Blocked"
+    echo "percent_blocked.type GAUGE"
+    echo "percent_blocked.unit %"
+    echo "percent_blocked.min 0"
+    echo "percent_blocked.max 100"
+    echo "unique_domains.label Unique Domains"
+    exit 0
+fi
+
+if [ "$1" = "autoconf" ]; then
+    echo yes
+    exit 0
+fi
+
+SID=$(get_session_id)
+STATS_JSON=$(get_stats "$SID")
+
+echo "total_queries.value $(echo "$STATS_JSON" | jq '.queries.total')"
+echo "blocked_queries.value $(echo "$STATS_JSON" | jq '.queries.blocked')"
+echo "cached_queries.value $(echo "$STATS_JSON" | jq '.queries.cached')"
+echo "forwarded_queries.value $(echo "$STATS_JSON" | jq '.queries.forwarded')"
+echo "percent_blocked.value $(echo "$STATS_JSON" | jq '.queries.percent_blocked')"
+echo "unique_domains.value $(echo "$STATS_JSON" | jq '.queries.unique_domains')"
