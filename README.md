@@ -58,6 +58,15 @@ This plugin fetches Pi-hole v6 DNS statistics using the new REST API and display
    sudo munin-run pihole_queries
    ```
 
+## Sample Graph Output
+
+![Pi-hole v6 Graph](screenshot.png)
+
+
+   
+
+
+
 ## Security Note
 
 - This script will fail with a clear error message if environment variables are missing.
